@@ -34,4 +34,19 @@ public class AlgoUtil {
         assertEquals("Hamburg", nodes.get(2).getProperty("name")) ;
         assertEquals(false,r.hasNext());
     }
+
+    public static void assertAStarResultWithoutFrankfurt(Result r) {
+        assertEquals(true, r.hasNext());
+        Map<String, Object> row = r.next();
+        assertEquals(697, ((Number)row.get("weight")).intValue()/1000) ;
+        Path path = (Path) row.get("path");
+        assertEquals(2, path.length()) ; // 3nodes, 2 rels
+        List<Node> nodes = Iterables.asList(path.nodes());
+        assertEquals("München", nodes.get(0).getProperty("name")) ;
+        assertEquals("Frankfurt", nodes.get(1).getProperty("name")) ;
+        assertEquals("Hamburg", nodes.get(2).getProperty("name")) ;
+        assertEquals(false,r.hasNext());
+    }
+
+
 }

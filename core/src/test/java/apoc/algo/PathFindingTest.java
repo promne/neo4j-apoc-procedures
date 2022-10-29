@@ -78,6 +78,17 @@ public class PathFindingTest {
     }
 
     @Test
+    public void testAStarExpand() {
+        db.executeTransactionally(SETUP_GEO);
+        testResult(db,
+                "MATCH (from:City {name:'München'}), (to:City {name:'Hamburg'}) " +
+                        "CALL apoc.algo.aStarExpand(from, to, '', 'dist', 'lat', 'lon') yield path, weight " +
+                        "RETURN path, weight" ,
+                r -> assertAStarResult(r)
+        );
+    }
+
+    @Test
     public void testAStarConfigWithPoint() {
         db.executeTransactionally(SETUP_GEO);
         testResult(db,
@@ -103,6 +114,29 @@ public class PathFindingTest {
         testCall(db,
             "MATCH (from:Loc{name:'A'}), (to:Loc{name:'D'}) " +
             "CALL apoc.algo.dijkstra(from, to, '', 'd') yield path, weight " +
+            "RETURN path, weight" ,
+            row ->  {
+                assertEquals(5.0, row.get("weight")) ;
+                assertEquals(1, ((Path)(row.get("path"))).length()) ; // 2nodes, 1 rels
+            }
+        );
+    }
+
+    @Test
+    public void testDijkstraExpand() {
+        db.executeTransactionally(SETUP_SIMPLE);
+        testCall(db,
+            "MATCH (from:Loc{name:'A'}), (to:Loc{name:'D'}) " +
+            "CALL apoc.algo.dijkstraExpand(from, to, 'match (lastNode)-[r:ROAD]->() return r', 'd') yield path, weight " +
+            "RETURN path, weight" ,
+            row ->  {
+                assertEquals(50.0, row.get("weight")) ;
+                assertEquals(2, ((Path)(row.get("path"))).length()) ; // 3nodes, 2 rels
+            }
+        );
+        testCall(db,
+            "MATCH (from:Loc{name:'A'}), (to:Loc{name:'D'}) " +
+            "CALL apoc.algo.dijkstraExpand(from, to, '', 'd') yield path, weight " +
             "RETURN path, weight" ,
             row ->  {
                 assertEquals(5.0, row.get("weight")) ;

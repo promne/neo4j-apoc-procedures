@@ -1,11 +1,20 @@
 package apoc.algo;
 
+import apoc.cypher.Cypher;
+import apoc.graph.Graphs;
 import apoc.path.RelationshipTypeAndDirections;
 import apoc.result.PathResult;
 import apoc.result.WeightedPathResult;
 import apoc.util.Util;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.Sets;
+import org.apache.commons.collections4.IterableUtils;
 import org.neo4j.graphalgo.*;
+import org.neo4j.graphalgo.impl.path.AStar;
 import org.neo4j.graphdb.*;
+import org.neo4j.graphdb.traversal.BranchState;
+import org.neo4j.internal.helpers.collection.Iterables;
 import org.neo4j.internal.helpers.collection.Pair;
 import org.neo4j.procedure.Context;
 import org.neo4j.procedure.Description;
@@ -13,8 +22,7 @@ import org.neo4j.procedure.Name;
 import org.neo4j.procedure.Procedure;
 import org.neo4j.values.storable.PointValue;
 
-import java.util.Collections;
-import java.util.Map;
+import java.util.*;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
@@ -92,6 +100,69 @@ public class PathFinding {
                 CommonEvaluators.geoEstimateEvaluator(latPropertyName, lonPropertyName));
         return WeightedPathResult.streamWeightedPathResult(startNode, endNode, algo);
     }
+    @Procedure
+    @Description("apoc.algo.aStarExpand(startNode, endNode, 'pathExpanderTransaction', 'distance','lat','lon') " +
+            "YIELD path, weight - run A* with relationship property name as cost function and cypher query used for expansion")
+    public Stream<WeightedPathResult> aStarExpand(
+            @Name("startNode") Node startNode,
+            @Name("endNode") Node endNode,
+            @Name("pathExpanderTransaction") String pathExpanderStatement,
+            @Name("weightPropertyName") String weightPropertyName,
+            @Name("latPropertyName") String latPropertyName,
+            @Name("lonPropertyName") String lonPropertyName) {
+
+        pathExpanderStatement = (pathExpanderStatement == null || pathExpanderStatement.trim().isEmpty()) ?
+                "match (lastNode)-[r]-() return r" : pathExpanderStatement;
+
+        PathFinder<WeightedPath> algo = GraphAlgoFactory.aStar(
+                new BasicEvaluationContext(tx, db),
+                buildPathExpanderTransaction(tx, pathExpanderStatement),
+                CommonEvaluators.doubleCostEvaluator(weightPropertyName),
+                CommonEvaluators.geoEstimateEvaluator(latPropertyName, lonPropertyName));
+        return WeightedPathResult.streamWeightedPathResult(startNode, endNode, algo);
+    }
+
+    public static PathExpander<Double> buildPathExpanderTransaction(Transaction tx, String statement) {
+        return new PathExpander<Double>() {
+            @Override
+            public Iterable<Relationship> expand(Path path, BranchState<Double> state) {
+                Set<Relationship> rels = new HashSet<>(10000);
+                Map<String,Object> params = Map.of("lastNode", path.endNode());
+
+                tx.execute(Cypher.withParamMapping(statement, params.keySet()), params).stream().forEach(row -> {
+                    row.forEach((k,v) -> extractRelationships(v,rels));
+                });
+
+                rels.retainAll(ImmutableSet.copyOf(path.endNode().getRelationships()));
+
+                return rels;
+            }
+
+            @Override
+            public PathExpander<Double> reverse() {
+                throw new RuntimeException("Not implemented");
+            }
+        };
+    }
+
+    public static void extractRelationships(Object data, Set<Relationship> rels) {
+        if (data instanceof Relationship) {
+            rels.add((Relationship) data);
+        }
+        else if (data instanceof Iterable) {
+            for (Object o : (Iterable)data) extractRelationships(o,rels);
+        }
+        else if (data instanceof Map) {
+            for (Object o : ((Map)data).values()) extractRelationships(o,rels);
+        }
+        else if (data instanceof Iterator) {
+            Iterator it = (Iterator) data;
+            while (it.hasNext()) extractRelationships(it.next(), rels);
+        } else if (data instanceof Object[]) {
+            for (Object o : (Object[])data) extractRelationships(o, rels);
+        }
+    }
+
 
     @Procedure
     @Description("apoc.algo.aStarConfig(startNode, endNode, 'KNOWS|<WORKS_WITH|IS_MANAGER_OF>', {weight:'dist',default:10," +
@@ -135,6 +206,28 @@ public class PathFinding {
 
         PathFinder<WeightedPath> algo = GraphAlgoFactory.dijkstra(
                 buildPathExpander(relTypesAndDirs),
+                (relationship, direction) -> Util.toDouble(relationship.getProperty(weightPropertyName, defaultWeight)),
+                (int)numberOfWantedPaths
+        );
+        return WeightedPathResult.streamWeightedPathResult(startNode, endNode, algo);
+    }
+
+    @Procedure
+    @Description("apoc.algo.dijkstraExpand(startNode, endNode, 'pathExpanderTransaction', 'distance', defaultValue, numberOfWantedResults) YIELD path," +
+            " weight - run dijkstra with relationship property name as cost function")
+    public Stream<WeightedPathResult> dijkstraExpand(
+            @Name("startNode") Node startNode,
+            @Name("endNode") Node endNode,
+            @Name("pathExpanderTransaction") String pathExpanderStatement,
+            @Name("weightPropertyName") String weightPropertyName,
+            @Name(value = "defaultWeight", defaultValue = "NaN") double defaultWeight,
+            @Name(value = "numberOfWantedPaths", defaultValue = "1") long numberOfWantedPaths) {
+
+        pathExpanderStatement = (pathExpanderStatement == null || pathExpanderStatement.trim().isEmpty()) ?
+                "match (lastNode)-[r]-() return r" : pathExpanderStatement;
+
+        PathFinder<WeightedPath> algo = GraphAlgoFactory.dijkstra(
+                buildPathExpanderTransaction(tx, pathExpanderStatement),
                 (relationship, direction) -> Util.toDouble(relationship.getProperty(weightPropertyName, defaultWeight)),
                 (int)numberOfWantedPaths
         );
